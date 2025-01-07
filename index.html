@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Landslide Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map { height: 500px; width: 100%; }
+        #search-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background-color: white;
+            padding: 5px;
+            border-radius: 5px;
+            display: flex;
+        }
+        #search-box {
+            flex-grow: 1;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="search-container">
+        <input type="text" id="search-box" placeholder="Enter Latitude,Longitude (e.g., 6.9,80.5)">
+        <button id="search-button">Go</button>
+    </div>
+
+    <script>
+        const map = L.map('map').setView([7.8731, 80.7718], 8);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        let currentMarker = null;
+        const geojsonLayers = {}; // Object to store GeoJSON layers
+
+        async function loadGeoJSON(geojsonURL, layerName) {
+            try {
+                const response = await fetch(geojsonURL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const geojson = await response.json();
+
+                if (!geojson || !geojson.features || geojson.features.length === 0) {
+                    console.warn(`GeoJSON file ${geojsonURL} is empty or invalid.`);
+                    return;
+                }
+
+                geojsonLayers[layerName] = L.geoJSON(geojson, { // Store the layer in the object
+                    onEachFeature: (feature, layer) => {
+                        if (feature.properties) {
+                           layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key}:</b> ${value}<br>`).join(''));
+                        }
+                    }
+                }).addTo(map);
+
+                // Add layer control after both layers have been loaded
+                if (Object.keys(geojsonLayers).length === 2) {
+                    L.control.layers(null, geojsonLayers).addTo(map);
+                }
+
+            } catch (error) {
+                console.error(`Error loading ${geojsonURL}:`, error);
+            }
+        }
+
+        const lsDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LS_Data.geojson';
+        const mergedOutputURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/merged_output.geojson';
+
+        loadGeoJSON(lsDataURL, "LS_Data");
+        loadGeoJSON(mergedOutputURL, "merged_output");
+
+
+        const searchBox = document.getElementById('search-box');
+        const searchButton = document.getElementById('search-button');
+
+        searchButton.addEventListener('click', goToLatLng);
+        searchBox.addEventListener("keyup", (event) => {
+            if (event.key === "Enter") {
+                goToLatLng();
+            }
+        });
+
+        function goToLatLng() {
+            const searchTerm = searchBox.value.trim();
+            if (searchTerm === "") return;
+
+            const latLng = searchTerm.split(',').map(Number);
+
+            if (latLng.length === 2 && !isNaN(latLng[0]) && !isNaN(latLng[1])) {
+                const [lat, lng] = latLng;
+                if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                    if (currentMarker) {
+                        map.removeLayer(currentMarker);
+                    }
+                    map.setView([lat, lng], 12);
+                    currentMarker = L.marker([lat, lng]).addTo(map).bindPopup(`Latitude: ${lat}, Longitude: ${lng}`);
+                    searchBox.value = "";
+                } else {
+                    alert("Invalid latitude or longitude values.");
+                }
+            } else {
+                alert("Please enter latitude and longitude separated by a comma (e.g., 6.9,80.5).");
+            }
+        }
+    </script>
+</body>
+</html>
