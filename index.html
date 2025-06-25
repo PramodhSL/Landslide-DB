@@ -1,113 +1,282 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Landslide Map</title>
+    <title>Advanced Landslide Map</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet's Core CSS and JS (You already have this) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- 1. ADD PLUGIN STYLESHEETS FOR MARKER CLUSTERING -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    
+    <!-- 2. ADD PLUGIN JAVASCRIPT FOR MARKER CLUSTERING -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
     <style>
-        #map { height: 500px; width: 100%; }
-        #search-container {
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; } /* Changed to fill the whole screen */
+        
+        /* Container for all top-left controls */
+        #controls-container {
             position: absolute;
             top: 10px;
-            left: 10px;
+            left: 50px; /* Moved slightly to avoid Leaflet's zoom control */
             z-index: 1000;
             background-color: white;
-            padding: 5px;
+            padding: 10px;
             border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column; /* Stack controls vertically */
+            gap: 10px; /* Add space between controls */
+        }
+        
+        .control-group {
             display: flex;
         }
-        #search-box {
+
+        #search-box, #hazard-filter {
             flex-grow: 1;
             margin-right: 5px;
+            border: 1px solid #ccc;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        #search-button {
+            cursor: pointer;
+        }
+        
+        /* 3. ADD CSS FOR THE LEGEND */
+        .legend {
+            background: white;
+            padding: 6px 10px;
+            border-radius: 5px;
+            line-height: 1.5;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        .legend h4 {
+            margin: 0 0 5px;
+            text-align: center;
+        }
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.9;
         }
     </style>
 </head>
 <body>
     <div id="map"></div>
-    <div id="search-container">
-        <input type="text" id="search-box" placeholder="Enter Latitude,Longitude (e.g., 6.9,80.5)">
-        <button id="search-button">Go</button>
+
+    <!-- 4. UPDATE HTML FOR NEW CONTROLS -->
+    <div id="controls-container">
+        <div class="control-group">
+            <input type="text" id="search-box" placeholder="Search by Inventory ID or Lat,Lng">
+            <button id="search-button">Go</button>
+        </div>
+        <div class="control-group">
+            <select id="hazard-filter">
+                <option value="all">All Hazard Types</option>
+                <option value="Landslide">Landslide</option>
+                <option value="Slope Failure">Slope Failure</option>
+                <option value="Rock Fall">Rock Fall</option>
+                <!-- Add other unique hazard types from your data here -->
+            </select>
+        </div>
     </div>
 
     <script>
+        // --- SETUP THE MAP & BASEMAPS ---
         const map = L.map('map').setView([7.8731, 80.7718], 8);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(map);
 
-        let currentMarker = null;
-        const geojsonLayers = {}; // Object to store GeoJSON layers
+        // Define different map views
+        const baseMaps = {
+            "Streets": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map), // The .addTo(map) makes this the default layer
+            "Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles © Esri'
+            })
+        };
 
-        async function loadGeoJSON(geojsonURL, layerName) {
+        // --- GLOBAL VARIABLES ---
+        let currentSearchMarker = null;
+        const geojsonLayers = {};
+        const originalGeojsonData = {}; // To store the raw data for filtering
+
+        // --- CUSTOM ICONS ---
+        // A function to create colored marker icons
+        function createIcon(color) {
+            return L.icon({
+                iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            });
+        }
+        
+        const icons = {
+            'Landslide': createIcon('red'),
+            'Slope Failure': createIcon('orange'),
+            'Rock Fall': createIcon('yellow'),
+            'Default': createIcon('blue') // A fallback icon
+        };
+        
+        // --- DATA LOADING ---
+        async function loadGeoJSON(url, layerName) {
             try {
-                const response = await fetch(geojsonURL);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                const response = await fetch(url);
                 const geojson = await response.json();
+                originalGeojsonData[layerName] = geojson; // Store raw data
 
-                if (!geojson || !geojson.features || geojson.features.length === 0) {
-                    console.warn(`GeoJSON file ${geojsonURL} is empty or invalid.`);
-                    return;
-                }
+                // Create a cluster group for this layer
+                const markers = L.markerClusterGroup();
 
-                geojsonLayers[layerName] = L.geoJSON(geojson, { // Store the layer in the object
+                // Create the GeoJSON layer with custom icons and popups
+                const newLayer = L.geoJSON(geojson, {
+                    pointToLayer: (feature, latlng) => {
+                        const hazardType = feature.properties.Type_of_Hazard;
+                        const icon = icons[hazardType] || icons['Default'];
+                        return L.marker(latlng, { icon: icon });
+                    },
                     onEachFeature: (feature, layer) => {
                         if (feature.properties) {
-                           layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key}:</b> ${value}<br>`).join(''));
+                            layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key.replace(/_/g, ' ')}:</b> ${value}<br>`).join(''));
                         }
                     }
-                }).addTo(map);
+                });
 
-                // Add layer control after both layers have been loaded
+                markers.addLayer(newLayer); // Add points to the cluster group
+                geojsonLayers[layerName] = markers; // Store the cluster group
+
+                // If this is the main layer, add it to the map by default
+                if (layerName === "Landslide Data") {
+                    map.addLayer(markers);
+                }
+
+                // Check if all layers are loaded to create the control
                 if (Object.keys(geojsonLayers).length === 2) {
-                    L.control.layers(null, geojsonLayers).addTo(map);
+                    // Pass both basemaps and overlay layers to the control
+                    L.control.layers(baseMaps, geojsonLayers, { collapsed: false }).addTo(map);
                 }
 
             } catch (error) {
-                console.error(`Error loading ${geojsonURL}:`, error);
+                console.error(`Error loading GeoJSON from ${url}:`, error);
             }
         }
 
-        const lsDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LandslideData.geojson';
+        // Define URLs and load the data
+        const landslideDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LandslideData.geojson';
         const mergedOutputURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/merged_output.geojson';
 
-        loadGeoJSON(lsDataURL, "LS_Data");
-        loadGeoJSON(mergedOutputURL, "merged_output");
+        loadGeoJSON(landslideDataURL, "Landslide Data");
+        loadGeoJSON(mergedOutputURL, "Merged Output");
 
+        // --- LEGEND ---
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function (map) {
+            const div = L.DomUtil.create('div', 'info legend');
+            div.innerHTML += '<h4>Hazard Types</h4>';
+            for (const type in icons) {
+                if (type !== 'Default') {
+                    div.innerHTML += `<i style="background: ${icons[type].options.iconUrl}; background-size: contain;"></i> ${type}<br>`;
+                }
+            }
+            return div;
+        };
+        legend.addTo(map);
 
+        // --- FILTERING LOGIC ---
+        const hazardFilter = document.getElementById('hazard-filter');
+        hazardFilter.addEventListener('change', (event) => {
+            const selectedType = event.target.value;
+            const layerToFilter = geojsonLayers["Landslide Data"]; // We'll filter this layer
+            
+            if (!layerToFilter || !originalGeojsonData["Landslide Data"]) return;
+
+            layerToFilter.clearLayers(); // Remove all existing markers from the cluster
+
+            const filteredGeoJson = {
+                ...originalGeojsonData["Landslide Data"], // Copy metadata
+                features: originalGeojsonData["Landslide Data"].features.filter(feature => {
+                    if (selectedType === 'all') {
+                        return true; // Show all
+                    }
+                    return feature.properties.Type_of_Hazard === selectedType;
+                })
+            };
+
+            // Re-create the GeoJSON layer with the filtered data and add it back to the cluster
+            const newFilteredLayer = L.geoJSON(filteredGeoJson, {
+                pointToLayer: (feature, latlng) => {
+                    const hazardType = feature.properties.Type_of_Hazard;
+                    const icon = icons[hazardType] || icons['Default'];
+                    return L.marker(latlng, { icon: icon });
+                },
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                         layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key.replace(/_/g, ' ')}:</b> ${value}<br>`).join(''));
+                    }
+                }
+            });
+            layerToFilter.addLayer(newFilteredLayer);
+        });
+
+        // --- SMART SEARCH LOGIC ---
         const searchBox = document.getElementById('search-box');
         const searchButton = document.getElementById('search-button');
 
-        searchButton.addEventListener('click', goToLatLng);
+        searchButton.addEventListener('click', performSearch);
         searchBox.addEventListener("keyup", (event) => {
-            if (event.key === "Enter") {
-                goToLatLng();
-            }
+            if (event.key === "Enter") performSearch();
         });
 
-        function goToLatLng() {
+        function performSearch() {
             const searchTerm = searchBox.value.trim();
             if (searchTerm === "") return;
 
-            const latLng = searchTerm.split(',').map(Number);
+            // Remove previous search marker if it exists
+            if (currentSearchMarker) map.removeLayer(currentSearchMarker);
 
-            if (latLng.length === 2 && !isNaN(latLng[0]) && !isNaN(latLng[1])) {
-                const [lat, lng] = latLng;
-                if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                    if (currentMarker) {
-                        map.removeLayer(currentMarker);
-                    }
-                    map.setView([lat, lng], 12);
-                    currentMarker = L.marker([lat, lng]).addTo(map).bindPopup(`Latitude: ${lat}, Longitude: ${lng}`);
-                    searchBox.value = "";
+            // Check if it's a coordinate search
+            if (searchTerm.includes(',')) {
+                const latLng = searchTerm.split(',').map(Number);
+                if (latLng.length === 2 && !isNaN(latLng[0]) && !isNaN(latLng[1])) {
+                    const [lat, lng] = latLng;
+                    map.setView([lat, lng], 14);
+                    currentSearchMarker = L.marker([lat, lng]).addTo(map).bindPopup(`Searched Location`).openPopup();
                 } else {
                     alert("Invalid latitude or longitude values.");
                 }
             } else {
-                alert("Please enter latitude and longitude separated by a comma (e.g., 6.9,80.5).");
+                // It's a property search (by Inventory ID)
+                let found = false;
+                for (const layerName in geojsonLayers) {
+                    geojsonLayers[layerName].eachLayer(function(layer) {
+                        // This check is a bit complex because of clustering. We need to find the feature.
+                        if (layer.feature && layer.feature.properties.Inventory_ID && layer.feature.properties.Inventory_ID.toLowerCase().includes(searchTerm.toLowerCase())) {
+                            // If clustered, zoom to the cluster and show its bounds
+                            if(layer.__parent && layer.__parent.zoomToShowLayer){
+                               layer.__parent.zoomToShowLayer(layer, function() {
+                                   layer.openPopup();
+                               });
+                            } else { // If not clustered
+                                map.setView(layer.getLatLng(), 16);
+                                layer.openPopup();
+                            }
+                            found = true;
+                        }
+                    });
+                }
+                if (!found) alert("Inventory ID not found.");
             }
         }
     </script>
