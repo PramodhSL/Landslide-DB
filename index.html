@@ -36,7 +36,7 @@
             display: flex;
         }
 
-        #search-box, #hazard-filter {
+        #search-box, #hazard-filter, #district-filter {
             flex-grow: 1;
             margin-right: 5px;
             border: 1px solid #ccc;
@@ -72,7 +72,7 @@
 
     <div id="controls-container">
         <div class="control-group">
-            <input type="text" id="search-box" placeholder="Search by Inventory ID or Lat,Lng">
+            <input type="text" id="search-box" placeholder="Search by Inventory ID or Name">
             <button id="search-button">Go</button>
         </div>
         <div class="control-group">
@@ -84,6 +84,25 @@
                 <option value="Cutting Failure">Cutting Failure</option>
                 <option value="Ground Settlement">Ground Settlement</option>
                 <option value="Other">Other</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <select id="district-filter">
+                <option value="all">All Districts</option>
+                <option value="Badulla">Badulla</option>
+                <option value="Colombo">Colombo</option>
+                <option value="Galle">Galle</option>
+                <option value="Gampaha">Gampaha</option>
+                <option value="Hambantota">Hambantota</option>
+                <option value="Kalutara">Kalutara</option>
+                <option value="Kandy">Kandy</option>
+                <option value="Kegalle">Kegalle</option>
+                <option value="Kurunegala">Kurunegala</option>
+                <option value="Matale">Matale</option>
+                <option value="Matara">Matara</option>
+                <option value="Monaragala">Monaragala</option>
+                <option value="Nuwara Eliya">Nuwara Eliya</option>
+                <option value="Rathnapura">Rathnapura</option>
             </select>
         </div>
     </div>
@@ -127,6 +146,8 @@
             'Other': createIcon('grey'),
             'Default': createIcon('blue')
         };
+        // *** NEW: Create a specific icon for the ARG layer ***
+        const argIcon = createIcon('black');
         
         // --- DATA LOADING ---
         async function loadGeoJSON(url, layerName) {
@@ -140,9 +161,14 @@
                     const markers = L.markerClusterGroup();
                     const pointLayer = L.geoJSON(geojson, {
                         pointToLayer: (feature, latlng) => {
-                            const hazardType = feature.properties.Type_of_Hazard;
-                            const icon = icons[hazardType] || icons['Default']; // Use default for ARG layer
-                            return L.marker(latlng, { icon: icon });
+                            // *** UPDATED: Use different icons for different layers ***
+                            if (layerName === "ARG Contact Details") {
+                                return L.marker(latlng, { icon: argIcon });
+                            } else { // It's the Landslide Data layer
+                                const hazardType = feature.properties.Type_of_Hazard;
+                                const icon = icons[hazardType] || icons['Default'];
+                                return L.marker(latlng, { icon: icon });
+                            }
                         },
                         onEachFeature: (feature, layer) => {
                             if (feature.properties) {
@@ -163,11 +189,8 @@
                 }
                 
                 geojsonLayers[layerName] = newLayer;
-
-                // Add all layers to the map by default
                 map.addLayer(newLayer);
 
-                // *** UPDATED: Check if THREE layers are loaded to create the control ***
                 if (Object.keys(geojsonLayers).length === 3) {
                     L.control.layers(baseMaps, geojsonLayers, { collapsed: false }).addTo(map);
                 }
@@ -176,48 +199,65 @@
             }
         }
 
-        // --- Define URLs and load the data (UPDATED SECTION) ---
         const landslideDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LandslideData.geojson';
         const polygonsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/Polygons.geojson';
-        // *** ADDED: New URL for the ARG Contact Details file ***
         const argContactsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/ARG%20Contact%20Details%20-%202023.geojson';
 
         loadGeoJSON(landslideDataURL, "Landslide Data");
         loadGeoJSON(polygonsURL, "Polygons");
-        // *** ADDED: Call the function for the new layer ***
         loadGeoJSON(argContactsURL, "ARG Contact Details");
 
-        // --- LEGEND ---
+        // --- LEGEND (UPDATED) ---
         const legend = L.control({ position: 'bottomright' });
         legend.onAdd = function (map) {
             const div = L.DomUtil.create('div', 'info legend');
-            div.innerHTML += '<h4>Hazard Types</h4>';
+            // Changed title to be more general
+            div.innerHTML += '<h4>Map Legend</h4>'; 
+            
+            // Add a sub-header for hazard types
+            div.innerHTML += '<b>Hazard Types</b><br>';
             for (const type in icons) {
                 if (type !== 'Default') {
                     div.innerHTML += 
                         `<i style="background-image: url(${icons[type].options.iconUrl}); width: 18px; height: 18px; display: inline-block; background-size: contain; background-repeat: no-repeat; vertical-align: middle;"></i> ${type}<br>`;
                 }
             }
+            
+            // Add a separator line
+            div.innerHTML += '<hr style="margin: 5px 0; border-top: 1px solid #ccc;">';
+            
+            // *** NEW: Add the entry for the ARG locations ***
+            div.innerHTML += 
+                `<i style="background-image: url(${argIcon.options.iconUrl}); width: 18px; height: 18px; display: inline-block; background-size: contain; background-repeat: no-repeat; vertical-align: middle;"></i> ARG Location<br>`;
+
             return div;
         };
         legend.addTo(map);
 
-        // --- FILTERING LOGIC (No changes needed here) ---
+        // --- FILTERING LOGIC ---
         const hazardFilter = document.getElementById('hazard-filter');
-        hazardFilter.addEventListener('change', (event) => {
-            const selectedType = event.target.value;
+        const districtFilter = document.getElementById('district-filter');
+
+        function applyFilters() {
+            const selectedHazard = hazardFilter.value;
+            const selectedDistrict = districtFilter.value;
+            
             const layerToFilter = geojsonLayers["Landslide Data"];
             
             if (!layerToFilter || !originalGeojsonData["Landslide Data"]) return;
 
             layerToFilter.clearLayers();
 
+            const filteredFeatures = originalGeojsonData["Landslide Data"].features.filter(feature => {
+                const hazardMatch = (selectedHazard === 'all' || feature.properties.Type_of_Hazard === selectedHazard);
+                const districtMatch = (selectedDistrict === 'all' || feature.properties.District === selectedDistrict);
+                
+                return hazardMatch && districtMatch;
+            });
+            
             const filteredGeoJson = {
                 ...originalGeojsonData["Landslide Data"],
-                features: originalGeojsonData["Landslide Data"].features.filter(feature => {
-                    if (selectedType === 'all') return true;
-                    return feature.properties.Type_of_Hazard === selectedType;
-                })
+                features: filteredFeatures
             };
 
             const newFilteredLayer = L.geoJSON(filteredGeoJson, {
@@ -232,10 +272,14 @@
                     }
                 }
             });
+            
             layerToFilter.addLayer(newFilteredLayer);
-        });
+        }
 
-        // --- SMART SEARCH LOGIC (No changes needed here) ---
+        hazardFilter.addEventListener('change', applyFilters);
+        districtFilter.addEventListener('change', applyFilters);
+
+        // --- SMART SEARCH LOGIC ---
         const searchBox = document.getElementById('search-box');
         const searchButton = document.getElementById('search-button');
 
@@ -263,8 +307,6 @@
                 for (const layerName in geojsonLayers) {
                     if (geojsonLayers[layerName].eachLayer) {
                          geojsonLayers[layerName].eachLayer(function(layer) {
-                            // The search logic is smart enough to handle different properties. 
-                            // It will search for 'Inventory_ID' in the landslide data and 'Name' or other properties in the ARG data if you add them.
                             let id_to_check = (layer.feature && layer.feature.properties.Inventory_ID) || (layer.feature && layer.feature.properties.Name);
                             if (id_to_check && id_to_check.toLowerCase().includes(searchTerm.toLowerCase())) {
                                 if(layer.__parent && layer.__parent.zoomToShowLayer){
