@@ -135,14 +135,13 @@
                 const geojson = await response.json();
                 originalGeojsonData[layerName] = geojson;
 
-                // For point data, use clustering. For other types (like polygons), just create a standard layer.
                 let newLayer;
                 if (geojson.features[0] && geojson.features[0].geometry.type === 'Point') {
                     const markers = L.markerClusterGroup();
                     const pointLayer = L.geoJSON(geojson, {
                         pointToLayer: (feature, latlng) => {
                             const hazardType = feature.properties.Type_of_Hazard;
-                            const icon = icons[hazardType] || icons['Default'];
+                            const icon = icons[hazardType] || icons['Default']; // Use default for ARG layer
                             return L.marker(latlng, { icon: icon });
                         },
                         onEachFeature: (feature, layer) => {
@@ -152,9 +151,8 @@
                         }
                     });
                     markers.addLayer(pointLayer);
-                    newLayer = markers; // The final layer is the cluster group
+                    newLayer = markers;
                 } else {
-                    // This will handle the Polygons.geojson file
                     newLayer = L.geoJSON(geojson, {
                         onEachFeature: (feature, layer) => {
                             if (feature.properties) {
@@ -169,8 +167,8 @@
                 // Add all layers to the map by default
                 map.addLayer(newLayer);
 
-                // Check if all layers are loaded to create the control
-                if (Object.keys(geojsonLayers).length === 2) {
+                // *** UPDATED: Check if THREE layers are loaded to create the control ***
+                if (Object.keys(geojsonLayers).length === 3) {
                     L.control.layers(baseMaps, geojsonLayers, { collapsed: false }).addTo(map);
                 }
             } catch (error) {
@@ -180,10 +178,14 @@
 
         // --- Define URLs and load the data (UPDATED SECTION) ---
         const landslideDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LandslideData.geojson';
-        const polygonsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/Polygons.geojson'; // Changed this line
+        const polygonsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/Polygons.geojson';
+        // *** ADDED: New URL for the ARG Contact Details file ***
+        const argContactsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/ARG%20Contact%20Details%20-%202023.geojson';
 
         loadGeoJSON(landslideDataURL, "Landslide Data");
-        loadGeoJSON(polygonsURL, "Polygons"); // Changed this line
+        loadGeoJSON(polygonsURL, "Polygons");
+        // *** ADDED: Call the function for the new layer ***
+        loadGeoJSON(argContactsURL, "ARG Contact Details");
 
         // --- LEGEND ---
         const legend = L.control({ position: 'bottomright' });
@@ -200,7 +202,7 @@
         };
         legend.addTo(map);
 
-        // --- FILTERING LOGIC ---
+        // --- FILTERING LOGIC (No changes needed here) ---
         const hazardFilter = document.getElementById('hazard-filter');
         hazardFilter.addEventListener('change', (event) => {
             const selectedType = event.target.value;
@@ -233,7 +235,7 @@
             layerToFilter.addLayer(newFilteredLayer);
         });
 
-        // --- SMART SEARCH LOGIC ---
+        // --- SMART SEARCH LOGIC (No changes needed here) ---
         const searchBox = document.getElementById('search-box');
         const searchButton = document.getElementById('search-button');
 
@@ -259,10 +261,12 @@
             } else {
                 let found = false;
                 for (const layerName in geojsonLayers) {
-                    // Check if the layer supports eachLayer (it might be a cluster group)
                     if (geojsonLayers[layerName].eachLayer) {
                          geojsonLayers[layerName].eachLayer(function(layer) {
-                            if (layer.feature && layer.feature.properties.Inventory_ID && layer.feature.properties.Inventory_ID.toLowerCase().includes(searchTerm.toLowerCase())) {
+                            // The search logic is smart enough to handle different properties. 
+                            // It will search for 'Inventory_ID' in the landslide data and 'Name' or other properties in the ARG data if you add them.
+                            let id_to_check = (layer.feature && layer.feature.properties.Inventory_ID) || (layer.feature && layer.feature.properties.Name);
+                            if (id_to_check && id_to_check.toLowerCase().includes(searchTerm.toLowerCase())) {
                                 if(layer.__parent && layer.__parent.zoomToShowLayer){
                                    layer.__parent.zoomToShowLayer(layer, function() { layer.openPopup(); });
                                 } else {
@@ -274,7 +278,7 @@
                         });
                     }
                 }
-                if (!found) alert("Inventory ID not found.");
+                if (!found) alert("ID or Name not found.");
             }
         }
     </script>
