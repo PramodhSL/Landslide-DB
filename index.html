@@ -70,7 +70,6 @@
 <body>
     <div id="map"></div>
 
-    <!-- UPDATED HTML FOR ALL CONTROLS -->
     <div id="controls-container">
         <div class="control-group">
             <input type="text" id="search-box" placeholder="Search by Inventory ID or Lat,Lng">
@@ -107,7 +106,7 @@
         const geojsonLayers = {};
         const originalGeojsonData = {};
 
-        // --- CUSTOM ICONS (UPDATED) ---
+        // --- CUSTOM ICONS ---
         function createIcon(color) {
             return L.icon({
                 iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
@@ -136,27 +135,41 @@
                 const geojson = await response.json();
                 originalGeojsonData[layerName] = geojson;
 
-                const markers = L.markerClusterGroup();
-                const newLayer = L.geoJSON(geojson, {
-                    pointToLayer: (feature, latlng) => {
-                        const hazardType = feature.properties.Type_of_Hazard;
-                        const icon = icons[hazardType] || icons['Default'];
-                        return L.marker(latlng, { icon: icon });
-                    },
-                    onEachFeature: (feature, layer) => {
-                        if (feature.properties) {
-                            layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key.replace(/_/g, ' ')}:</b> ${value}<br>`).join(''));
+                // For point data, use clustering. For other types (like polygons), just create a standard layer.
+                let newLayer;
+                if (geojson.features[0] && geojson.features[0].geometry.type === 'Point') {
+                    const markers = L.markerClusterGroup();
+                    const pointLayer = L.geoJSON(geojson, {
+                        pointToLayer: (feature, latlng) => {
+                            const hazardType = feature.properties.Type_of_Hazard;
+                            const icon = icons[hazardType] || icons['Default'];
+                            return L.marker(latlng, { icon: icon });
+                        },
+                        onEachFeature: (feature, layer) => {
+                            if (feature.properties) {
+                                layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key.replace(/_/g, ' ')}:</b> ${value}<br>`).join(''));
+                            }
                         }
-                    }
-                });
-
-                markers.addLayer(newLayer);
-                geojsonLayers[layerName] = markers;
-
-                if (layerName === "Landslide Data") {
-                    map.addLayer(markers);
+                    });
+                    markers.addLayer(pointLayer);
+                    newLayer = markers; // The final layer is the cluster group
+                } else {
+                    // This will handle the Polygons.geojson file
+                    newLayer = L.geoJSON(geojson, {
+                        onEachFeature: (feature, layer) => {
+                            if (feature.properties) {
+                                layer.bindPopup(Object.entries(feature.properties).map(([key, value]) => `<b>${key.replace(/_/g, ' ')}:</b> ${value}<br>`).join(''));
+                            }
+                        }
+                    });
                 }
+                
+                geojsonLayers[layerName] = newLayer;
 
+                // Add all layers to the map by default
+                map.addLayer(newLayer);
+
+                // Check if all layers are loaded to create the control
                 if (Object.keys(geojsonLayers).length === 2) {
                     L.control.layers(baseMaps, geojsonLayers, { collapsed: false }).addTo(map);
                 }
@@ -165,12 +178,14 @@
             }
         }
 
+        // --- Define URLs and load the data (UPDATED SECTION) ---
         const landslideDataURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/LandslideData.geojson';
-        const mergedOutputURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/merged_output.geojson';
-        loadGeoJSON(landslideDataURL, "Landslide Data");
-        loadGeoJSON(mergedOutputURL, "Merged Output");
+        const polygonsURL = 'https://raw.githubusercontent.com/PramodhSL/Landslide-DB/main/Polygons.geojson'; // Changed this line
 
-        // --- LEGEND (UPDATED) ---
+        loadGeoJSON(landslideDataURL, "Landslide Data");
+        loadGeoJSON(polygonsURL, "Polygons"); // Changed this line
+
+        // --- LEGEND ---
         const legend = L.control({ position: 'bottomright' });
         legend.onAdd = function (map) {
             const div = L.DomUtil.create('div', 'info legend');
@@ -244,17 +259,20 @@
             } else {
                 let found = false;
                 for (const layerName in geojsonLayers) {
-                    geojsonLayers[layerName].eachLayer(function(layer) {
-                        if (layer.feature && layer.feature.properties.Inventory_ID && layer.feature.properties.Inventory_ID.toLowerCase().includes(searchTerm.toLowerCase())) {
-                            if(layer.__parent && layer.__parent.zoomToShowLayer){
-                               layer.__parent.zoomToShowLayer(layer, function() { layer.openPopup(); });
-                            } else {
-                                map.setView(layer.getLatLng(), 16);
-                                layer.openPopup();
+                    // Check if the layer supports eachLayer (it might be a cluster group)
+                    if (geojsonLayers[layerName].eachLayer) {
+                         geojsonLayers[layerName].eachLayer(function(layer) {
+                            if (layer.feature && layer.feature.properties.Inventory_ID && layer.feature.properties.Inventory_ID.toLowerCase().includes(searchTerm.toLowerCase())) {
+                                if(layer.__parent && layer.__parent.zoomToShowLayer){
+                                   layer.__parent.zoomToShowLayer(layer, function() { layer.openPopup(); });
+                                } else {
+                                    map.setView(layer.getLatLng(), 16);
+                                    layer.openPopup();
+                                }
+                                found = true;
                             }
-                            found = true;
-                        }
-                    });
+                        });
+                    }
                 }
                 if (!found) alert("Inventory ID not found.");
             }
